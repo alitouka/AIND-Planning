@@ -10,6 +10,14 @@ from lp_utils import (
 from my_planning_graph import PlanningGraph
 
 
+def bin_rel(relation, obj1, obj2):
+    return expr("{}({}, {})".format(relation, obj1, obj2))
+
+
+def ternary_rel(relation, obj1, obj2, obj3):
+    return expr("{}({}, {}, {})".format(relation, obj1, obj2, obj3))
+
+
 class AirCargoProblem(Problem):
     def __init__(self, cargos, planes, airports, initial: FluentState, goal: list):
         """
@@ -46,7 +54,6 @@ class AirCargoProblem(Problem):
             list of Action objects
         '''
 
-        # TODO create concrete Action objects based on the domain action schema for: Load, Unload, and Fly
         # concrete actions definition: specific literal action that does not include variables as with the schema
         # for example, the action schema 'Load(c, p, a)' can represent the concrete actions 'Load(C1, P1, SFO)'
         # or 'Load(C2, P2, JFK)'.  The actions for the planning problem must be concrete because the problems in
@@ -58,7 +65,21 @@ class AirCargoProblem(Problem):
             :return: list of Action objects
             '''
             loads = []
-            # TODO create all load ground actions from the domain Load action
+
+            for a in self.airports:
+                for c in self.cargos:
+                    for p in self.planes:
+                        precond_pos = [bin_rel('At', c, a), bin_rel('At', p, a)]
+                        precond_neg = []
+
+                        effect_add = [bin_rel('In', c, p)]
+                        effect_rem = [bin_rel('At', c, a)]
+                        load = Action(ternary_rel('Load', c, p, a),
+                                      [precond_pos, precond_neg],
+                                      [effect_add, effect_rem]
+                                      )
+                        loads.append(load)
+
             return loads
 
         def unload_actions():
@@ -67,7 +88,21 @@ class AirCargoProblem(Problem):
             :return: list of Action objects
             '''
             unloads = []
-            # TODO create all Unload ground actions from the domain Unload action
+
+            for a in self.airports:
+                for c in self.cargos:
+                    for p in self.planes:
+                        precond_pos = [bin_rel('In', c, p), bin_rel('At', p, a)]
+                        precond_neg = []
+
+                        effect_add = [bin_rel('At', c, a)]
+                        effect_rem = [bin_rel('In', c, p)]
+                        unload = Action(ternary_rel('Unload', c, p, a),
+                                        [precond_pos, precond_neg],
+                                        [effect_add, effect_rem]
+                                        )
+                        unloads.append(unload)
+
             return unloads
 
         def fly_actions():
@@ -80,9 +115,9 @@ class AirCargoProblem(Problem):
                 for to in self.airports:
                     if fr != to:
                         for p in self.planes:
-                            precond_pos = [expr("At({}, {})".format(p, fr)),
-                                           ]
+                            precond_pos = [bin_rel('At', p, fr)]
                             precond_neg = []
+
                             effect_add = [expr("At({}, {})".format(p, to))]
                             effect_rem = [expr("At({}, {})".format(p, fr))]
                             fly = Action(expr("Fly({}, {}, {})".format(p, fr, to)),
@@ -102,20 +137,16 @@ class AirCargoProblem(Problem):
         :return: list of Action objects
         """
 
-        # Code copied from example_have_cake.py
         possible_actions = []
-        kb = PropKB()
-        kb.tell(decode_state(state, self.state_map).pos_sentence())
+        current_state = set(decode_state(state, self.state_map).pos)
+
         for action in self.actions_list:
-            is_possible = True
-            for clause in action.precond_pos:
-                if clause not in kb.clauses:
-                    is_possible = False
-            for clause in action.precond_neg:
-                if clause in kb.clauses:
-                    is_possible = False
-            if is_possible:
+            positive_preconditions = set(action.precond_pos)
+            negative_preconditions = set(action.precond_neg)
+
+            if positive_preconditions.issubset(current_state) and negative_preconditions.isdisjoint(current_state):
                 possible_actions.append(action)
+
         return possible_actions
 
     def result(self, state: str, action: Action):
@@ -127,21 +158,14 @@ class AirCargoProblem(Problem):
         :param action: Action applied
         :return: resulting state after action
         """
-        # Code copied from example_have_cake.py
-        new_state = FluentState([], [])
+
         old_state = decode_state(state, self.state_map)
-        for fluent in old_state.pos:
-            if fluent not in action.effect_rem:
-                new_state.pos.append(fluent)
-        for fluent in action.effect_add:
-            if fluent not in new_state.pos:
-                new_state.pos.append(fluent)
-        for fluent in old_state.neg:
-            if fluent not in action.effect_add:
-                new_state.neg.append(fluent)
-        for fluent in action.effect_rem:
-            if fluent not in new_state.neg:
-                new_state.neg.append(fluent)
+        effect_add = set(action.effect_add)
+        effect_rem = set(action.effect_rem)
+        updated_pos = set(old_state.pos).union(effect_add).difference(effect_rem)
+        updated_neg = set(old_state.neg).union(effect_rem).difference(effect_add)
+        new_state = FluentState(list(updated_pos), list(updated_neg))
+
         return encode_state(new_state, self.state_map)
 
     def goal_test(self, state: str) -> bool:
@@ -150,12 +174,8 @@ class AirCargoProblem(Problem):
         :param state: str representing state
         :return: bool
         """
-        kb = PropKB()
-        kb.tell(decode_state(state, self.state_map).pos_sentence())
-        for clause in self.goal:
-            if clause not in kb.clauses:
-                return False
-        return True
+        current_state = decode_state(state, self.state_map)
+        return set(self.goal).issubset(set(current_state.pos))
 
     def h_1(self, node: Node):
         # note that this is not a true heuristic
@@ -181,34 +201,12 @@ class AirCargoProblem(Problem):
         conditions by ignoring the preconditions required for an action to be
         executed.
         '''
-        # TODO implement (see Russell-Norvig Ed-3 10.2.3  or Russell-Norvig Ed-2 11.2)
-        count = 0
+
+        current_state = decode_state(node.state, self.state_map)
+        satisfied_goals = set(current_state.pos).intersection(self.goal)
+        count = len(self.goal) - len(satisfied_goals)
         return count
 
-
-def air_cargo_p1() -> AirCargoProblem:
-    cargos = ['C1', 'C2']
-    planes = ['P1', 'P2']
-    airports = ['JFK', 'SFO']
-    pos = [expr('At(C1, SFO)'),
-           expr('At(C2, JFK)'),
-           expr('At(P1, SFO)'),
-           expr('At(P2, JFK)'),
-           ]
-    neg = [expr('At(C2, SFO)'),
-           expr('In(C2, P1)'),
-           expr('In(C2, P2)'),
-           expr('At(C1, JFK)'),
-           expr('In(C1, P1)'),
-           expr('In(C1, P2)'),
-           expr('At(P1, JFK)'),
-           expr('At(P2, SFO)'),
-           ]
-    init = FluentState(pos, neg)
-    goal = [expr('At(C1, JFK)'),
-            expr('At(C2, SFO)'),
-            ]
-    return AirCargoProblem(cargos, planes, airports, init, goal)
 
 def generate_propositions(relation:str, obj1:list, obj2:list, all_obj2:list):
     """
@@ -218,29 +216,31 @@ def generate_propositions(relation:str, obj1:list, obj2:list, all_obj2:list):
     :param relation: a binary relation, such as 'In' or 'At'
     :param obj1:     a list of objects which can be the first argument of a relation, and for which a relation holds
     :param obj2:     a list of objects which can be the 2nd argument of a relation, and for which a relation holds
-    :param all_obj2: a list of ALL objects of the same type as obj2.
+    :param all_obj2: a list of ALL objects of the same type as obj2, e.g. if obj2 is a list of airports, then all_obj2
+                     should be a list of all known airports
 
     :return: two lists. The first contains propositions which are true, the second contains propositions which are false
 
-     For example, if a plane P1 is at SFO airport, it cannot be in any other airports. So, if you call this function as
+     For example, if a plane P1 is at SFO airport, it cannot be at any other airport. So, if you call this function as
       generate_propositions('At', ['P1'], ['SFO'], ['SFO', 'JFK', 'ATL'])
      then it will return two lists:
       [expr('At(P1, SFO)')]
      and
-      [expr('At(P1, JFK)')], [expr('At(P1, ATL)')],
+      [expr('At(P1, JFK)'), expr('At(P1, ATL)')],
     """
     pos = []
     neg = []
 
     for o1 in obj1:
         for o2 in obj2:
-            pos.append(expr("{}({}, {})".format(relation, o1, o2)))
+            pos.append(bin_rel(relation, o1, o2))
 
     for o1 in obj1:
         for o2 in set(all_obj2).difference(set(obj2)):
-            neg.append(expr("{}({}, {})".format(relation, o1, o2)))
+            neg.append(bin_rel(relation, o1, o2))
 
     return pos, neg
+
 
 def append_propositions(relation:str, obj1:list, obj2:list, all_obj2:list, pos, neg):
     """
@@ -254,6 +254,46 @@ def append_propositions(relation:str, obj1:list, obj2:list, all_obj2:list, pos, 
     p, n = generate_propositions(relation, obj1, obj2, all_obj2)
     pos.extend(p)
     neg.extend(n)
+
+
+def air_cargo_p1() -> AirCargoProblem:
+    cargos = ['C1', 'C2']
+    planes = ['P1', 'P2']
+    airports = ['JFK', 'SFO']
+
+    # Original implementation
+    # pos = [expr('At(C1, SFO)'),
+    #        expr('At(C2, JFK)'),
+    #        expr('At(P1, SFO)'),
+    #        expr('At(P2, JFK)'),
+    #        ]
+    # neg = [expr('At(C2, SFO)'),
+    #        expr('In(C2, P1)'),
+    #        expr('In(C2, P2)'),
+    #        expr('At(C1, JFK)'),
+    #        expr('In(C1, P1)'),
+    #        expr('In(C1, P2)'),
+    #        expr('At(P1, JFK)'),
+    #        expr('At(P2, SFO)'),
+    #        ]
+
+    pos = []
+    neg = []
+
+    append_propositions('At', ['C1'], ['SFO'], airports, pos, neg)
+    append_propositions('At', ['C2'], ['JFK'], airports, pos, neg)
+
+    append_propositions('At', ['P1'], ['SFO'], airports, pos, neg)
+    append_propositions('At', ['P2'], ['JFK'], airports, pos, neg)
+
+    append_propositions('In', cargos, [], planes, pos, neg)
+
+    init = FluentState(pos, neg)
+    goal = [expr('At(C1, JFK)'),
+            expr('At(C2, SFO)'),
+            ]
+    return AirCargoProblem(cargos, planes, airports, init, goal)
+
 
 def air_cargo_p2() -> AirCargoProblem:
     cargos = ['C1', 'C2', 'C3']
@@ -312,4 +352,4 @@ def air_cargo_p3() -> AirCargoProblem:
     return AirCargoProblem(cargos, planes, airports, init, goal)
 
 if __name__=="__main__":
-    air_cargo_p3()
+    air_cargo_p2()
