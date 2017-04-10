@@ -190,8 +190,12 @@ class AirCargoProblem(Problem):
         :param state: str representing state
         :return: bool
         """
-        current_state = decode_state(state, self.state_map)
-        return set(self.goal).issubset(set(current_state.pos))
+        kb = PropKB()
+        kb.tell(decode_state(state, self.state_map).pos_sentence())
+        for clause in self.goal:
+            if clause not in kb.clauses:
+                return False
+        return True
 
     def h_1(self, node: Node):
         # note that this is not a true heuristic
