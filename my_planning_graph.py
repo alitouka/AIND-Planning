@@ -2,7 +2,9 @@ from aimacode.planning import Action
 from aimacode.search import Problem
 from aimacode.utils import expr
 from lp_utils import decode_state
+import logging
 
+logging.basicConfig(level=logging.ERROR)
 
 class PgNode():
     ''' Base class for planning graph nodes.
